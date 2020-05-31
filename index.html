@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<script src="https://unpkg.com/three@0.85.0/build/three.min.js"></script>
+	<script src="https://unpkg.com/three@0.85.0/examples/js/controls/OrbitControls.js"></script>
+	<title>WebGL PickMatrix Sample</title>
+</head>
+<body>
+	<h1>WebGL PickMatrix Sample</h1>
+	<dl>
+		<dt>右ドラッグ</dt>
+		<dd>カメラ回転</dd>
+		<dt>マウスオーバー</dt>
+		<dd>頂点の色が変わる</dd>
+	</dl>
+	<canvas id="canvas"></canvas>
+	<script>
+		const width = 500;
+		const height = 300;
+
+		window.addEventListener("DOMContentLoaded", init);
+
+		const box = new THREE.Mesh();
+
+		let camera;
+		let vertex = [];
+		let mMat = new THREE.Matrix4();
+		let mvp = new THREE.Matrix4();
+
+		function init() {
+			// レンダラ―作成
+			const renderer = new THREE.WebGLRenderer({
+				canvas: document.querySelector("#canvas")
+			});
+			renderer.setSize(width, height);
+			renderer.setPixelRatio(window.devicePixelRatio);
+		
+			// シーン作成
+			const scene = new THREE.Scene();
+
+			// カメラ作成
+			camera = new THREE.PerspectiveCamera(45, width / height, 1, 10000);
+			camera.position.set(0, 0, 1000);
+			const camController = new THREE.OrbitControls(camera);
+			camController.update();
+
+			// 立方体作成
+			const geometry = new THREE.BoxGeometry(500, 500, 500);
+			const material = new THREE.MeshStandardMaterial({
+				color: 0x0000ff
+			});
+			box.geometry = geometry;
+			box.material = material;
+			scene.add(box);
+
+			// wireframe
+			const edge = new THREE.WireframeGeometry(box.geometry);
+			const eMat = new THREE.LineBasicMaterial({
+				color: 0xffffff,
+				linewidth: 2
+			});
+			box.add(new THREE.LineSegments(edge, eMat));
+
+			// point
+			const pGeo = new THREE.BufferGeometry();
+			pGeo.colorsNeedUpdate = true;
+			vertex = box.geometry.vertices.slice();
+			pGeo.attributes.position = new THREE.Float32BufferAttribute(vertex.map(vert => vert.toArray()).flat(), 3);
+			const vColor = [];
+			const vLength = vertex.length;
+			for(i=0; i<vLength; i++) {
+				vColor.push(new THREE.Color(0xffff00));
+			}
+			pGeo.attributes.color = new THREE.Float32BufferAttribute(vColor.map(c => c.toArray()).flat(), 3);
+			const pMat = new THREE.PointsMaterial({
+				size: 10,
+				vertexColors: true,
+				needsUpdate: true,
+				sizeAttenuation: false
+			});
+			const points = new THREE.Points(pGeo, pMat);
+			points.name = 'points';
+			box.add(points);
+
+			mMat = box.matrixWorld;
+
+			// ライト作成
+			const light = new THREE.DirectionalLight(0xffffff);
+			light.intensity = 2;
+			light.position.set(1, 1, 1);
+			scene.add(light);
+
+			tick();
+
+			function tick() {
+				requestAnimationFrame(tick);
+
+				camController.update();
+
+				const vSize = vertex.length;
+				for(i=0; i<vSize; ++i) {
+					pickup(i);
+				}
+
+				// 描画
+				renderer.render(scene, camera);
+			}
+
+			canvas.addEventListener('mousemove', handleMouseMove);
+		}
+
+		function pickup(idx) {
+			const vMat = camera.matrixWorldInverse.clone();
+			const pMat = camera.projectionMatrix.clone();
+			mvp = pMat.multiply(vMat.multiply(mMat));
+
+			let v = vertex[idx].clone();
+			v.applyMatrix4(mvp);
+			// クリッピング空間からスクリーン空間へ変換
+			v.applyMatrix4(makeScreenMatrix(width, height));
+
+			const pickMat = makePickMatrix([0, 0, width, height], mouse.x, mouse.y, 10, 10);
+
+			v.applyMatrix4(pickMat);
+
+			if((-1.0 < v.x && v.x < 1.0) && (-1.0 < v.y && v.y < 1.0)) {
+				box.getObjectByName('points').geometry.attributes.color.array[idx * 3 + 0] = 1.0;	// R
+				box.getObjectByName('points').geometry.attributes.color.array[idx * 3 + 1] = 0.0;	// G
+				box.getObjectByName('points').geometry.attributes.color.array[idx * 3 + 2] = 0.0;	// B
+
+				box.getObjectByName('points').geometry.attributes.color.needsUpdate = true;
+			}else {
+				box.getObjectByName('points').geometry.attributes.color.array[idx * 3 + 0] = 1.0;	// R
+				box.getObjectByName('points').geometry.attributes.color.array[idx * 3 + 1] = 1.0;	// G
+				box.getObjectByName('points').geometry.attributes.color.array[idx * 3 + 2] = 0.0;	// B
+
+				box.getObjectByName('points').geometry.attributes.color.needsUpdate = true;
+			}
+		}
+
+		const mouse = new THREE.Vector2();
+
+		function handleMouseMove(event) {
+			const element = event.currentTarget;
+
+			mouse.x = event.clientX - element.offsetLeft;
+			mouse.y = event.clientY - element.offsetTop;
+		}
+
+		function makeScreenMatrix(w, h) {
+			const tMat = new THREE.Matrix4();
+			const sMat = new THREE.Matrix4();
+
+			tMat.identity();
+			sMat.identity();
+
+			tMat.makeTranslation(1, 1, 0);
+			sMat.makeScale(w / 2.0, h / 2.0, 1.0);
+
+			const mat = new THREE.Matrix4();
+			mat.identity();
+
+			mat.multiply(sMat);
+			mat.multiply(tMat);
+
+			sMat.makeScale(1, -1, 1);
+			mat.multiply(sMat);
+
+			return mat;
+		}
+
+		function makePickMatrix(viewport, x, y, deltax, deltay)
+		{
+			if (deltax <= 0 || deltay <= 0) {
+				return;
+			}
+
+			const tMat = new THREE.Matrix4();
+			const sMat = new THREE.Matrix4();
+
+			tMat.identity();
+			sMat.identity();
+
+			tMat.makeTranslation(-x, -y, 0);
+			sMat.makeScale(-2 / deltax, -2 / deltay, 1.0);
+
+			const pickMat = new THREE.Matrix4();
+			pickMat.identity();
+
+			pickMat.multiply(sMat);
+			pickMat.multiply(tMat);
+
+			return pickMat;
+		}
+
+		function toStringVec3(vec3) {
+			return `(${vec3.x.toFixed(2)}, ${vec3.y.toFixed(2)}, ${vec3.z.toFixed(2)})`
+		}
+		function toStringMat4(mat4) {
+			const arr = mat4.toArray();
+
+			return `(${arr[0].toFixed(2)}, ${arr[4].toFixed(2)}, ${arr[8].toFixed(2)}, ${arr[12].toFixed(2)}\n${arr[1].toFixed(2)}, ${arr[5].toFixed(2)}, ${arr[9].toFixed(2)}, ${arr[13].toFixed(2)}\n${arr[2].toFixed(2)}, ${arr[6].toFixed(2)}, ${arr[10].toFixed(2)}, ${arr[14].toFixed(2)}\n${arr[3].toFixed(2)}, ${arr[7].toFixed(2)}, ${arr[11].toFixed(2)}, ${arr[15].toFixed(2)})`;
+		}
+	</script>
+</body>
+</html>
